@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Phaser WebSocket MultiPlayer</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+</head>
+<body>
+  <script>
+    // Conexión al servidor WebSocket
+    const socket = new WebSocket("ws://localhost:8080/GameServer/game");
+
+    // Genera un ID único para este jugador
+    const playerId = Math.random().toString(36).substring(2, 9);
+
+    // Diccionario para almacenar sprites de jugadores, incluyendo el jugador local
+    let players = {};
+
+    // Manejador de mensajes del WebSocket
+    socket.onmessage = function(event) {
+      try {
+        const data = JSON.parse(event.data);
+        // Se espera que data tenga la forma: { id: "someId", x: <number>, y: <number> }
+        if (data && data.id) {
+          // Si el mensaje proviene de otro jugador
+          if (data.id !== playerId) {
+            // Si ese jugador aún no existe en el diccionario, lo creamos
+            if (!players[data.id]) {
+              players[data.id] = gameScene.add.image(data.x, data.y, 'player');
+            } else {
+              // Si ya existe, actualizamos su posición
+              players[data.id].setPosition(data.x, data.y);
+            }
+          } else {
+            // Opcional: puedes actualizar también la posición local si lo deseas
+          }
+        }
+      } catch (e) {
+        console.error("Error procesando el mensaje:", e);
+      }
+    };
+
+    // Phaser Scene
+    class GameScene extends Phaser.Scene {
+      constructor() {
+        super('GameScene');
+      }
+      preload() {
+        this.load.image('player', 'assets/player.png'); // Asegúrate de tener el recurso en la ruta adecuada
+      }
+      create() {
+        // Creamos el jugador local
+        players[playerId] = this.physics.add.image(400, 300, 'player');
+
+        // Configurar controles de teclado
+        this.cursors = this.input.keyboard.createCursorKeys();
+      }
+      update() {
+        let localPlayer = players[playerId];
+        if (!localPlayer) return;
+
+        let moved = false;
+        // Movimiento básico
+        if (this.cursors.left.isDown) {
+          localPlayer.x -= 2;
+          moved = true;
+        }
+        if (this.cursors.right.isDown) {
+          localPlayer.x += 2;
+          moved = true;
+        }
+        if (this.cursors.up.isDown) {
+          localPlayer.y -= 2;
+          moved = true;
+        }
+        if (this.cursors.down.isDown) {
+          localPlayer.y += 2;
+          moved = true;
+        }
+
+        // Si se movió, enviar la posición actualizada al servidor
+        if (moved) {
+          const data = {
+            id: playerId,
+            x: localPlayer.x,
+            y: localPlayer.y
+          };
+          socket.send(JSON.stringify(data));
+        }
+      }
+    }
+
+    // Variable global para acceder a la escena desde el manejador de WebSocket
+    let gameScene;
+
+    // Configuración de Phaser
+    const config = {
+      type: Phaser.AUTO,
+      width: 800,
+      height: 600,
+      physics: { default: 'arcade' },
+      scene: {
+        preload: function() { GameScene.prototype.preload.call(this); },
+        create: function() {
+          GameScene.prototype.create.call(this);
+          gameScene = this; // Guardamos la referencia a la escena
+        },
+        update: function() { GameScene.prototype.update.call(this); }
+      }
+    };
+
+    // Inicializar el juego
+    const game = new Phaser.Game(config);
+  </script>
+</body>
+</html>
