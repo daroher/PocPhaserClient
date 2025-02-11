@@ -1,116 +1,285 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Phaser WebSocket MultiPlayer</title>
+  <title>Phaser WebSocket MultiPlayer con Menú y Minimapa</title>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    /* Estilos para el menú overlay */
+    #menu {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.85);
+      color: #fff;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-family: sans-serif;
+    }
+    #menu h1 {
+      font-size: 3em;
+      margin-bottom: 20px;
+    }
+    #menu label {
+      font-size: 1.5em;
+      margin: 10px;
+    }
+    #menu button {
+      font-size: 1.5em;
+      padding: 10px 20px;
+      margin-top: 20px;
+      cursor: pointer;
+    }
+  </style>
 </head>
 <body>
+  <!-- Menú inicial -->
+  <div id="menu">
+    <h1>Bienvenido al Juego</h1>
+    <label>
+      <input type="checkbox" id="radioOperator" /> Operador de Radio
+    </label>
+    <label>
+      <input type="checkbox" id="observer" /> Observador
+    </label>
+    <button onclick="startGame()">Iniciar Juego</button>
+  </div>
+
   <script>
-    // Conexión al servidor WebSocket
-    const socket = new WebSocket("ws://localhost:8080/GameServer/game");
+    // Variables globales para los roles (se pueden usar luego en la lógica del juego)
+    let isRadioOperator = false;
+    let isObserver = false;
+    let gameScene; // referencia a la escena, que usaremos en el WebSocket
+    let game;      // referencia a la instancia del juego
 
-    // Genera un ID único para este jugador
-    const playerId = Math.random().toString(36).substring(2, 9);
-
-    // Diccionario para almacenar sprites de jugadores, incluyendo el jugador local
-    let players = {};
-
-    // Manejador de mensajes del WebSocket
-    socket.onmessage = function(event) {
-      try {
-        const data = JSON.parse(event.data);
-        // Se espera que data tenga la forma: { id: "someId", x: <number>, y: <number> }
-        if (data && data.id) {
-          // Si el mensaje proviene de otro jugador
-          if (data.id !== playerId) {
-            // Si ese jugador aún no existe en el diccionario, lo creamos
-            if (!players[data.id]) {
-              players[data.id] = gameScene.add.image(data.x, data.y, 'player');
-            } else {
-              // Si ya existe, actualizamos su posición
-              players[data.id].setPosition(data.x, data.y);
-            }
-          } else {
-            // Opcional: puedes actualizar también la posición local si lo deseas
-          }
-        }
-      } catch (e) {
-        console.error("Error procesando el mensaje:", e);
-      }
-    };
-
-    // Phaser Scene
-    class GameScene extends Phaser.Scene {
-      constructor() {
-        super('GameScene');
-      }
-      preload() {
-        this.load.image('player', 'assets/player.png'); // Asegúrate de tener el recurso en la ruta adecuada
-      }
-      create() {
-        // Creamos el jugador local
-        players[playerId] = this.physics.add.image(400, 300, 'player');
-
-        // Configurar controles de teclado
-        this.cursors = this.input.keyboard.createCursorKeys();
-      }
-      update() {
-        let localPlayer = players[playerId];
-        if (!localPlayer) return;
-
-        let moved = false;
-        // Movimiento básico
-        if (this.cursors.left.isDown) {
-          localPlayer.x -= 2;
-          moved = true;
-        }
-        if (this.cursors.right.isDown) {
-          localPlayer.x += 2;
-          moved = true;
-        }
-        if (this.cursors.up.isDown) {
-          localPlayer.y -= 2;
-          moved = true;
-        }
-        if (this.cursors.down.isDown) {
-          localPlayer.y += 2;
-          moved = true;
-        }
-
-        // Si se movió, enviar la posición actualizada al servidor
-        if (moved) {
-          const data = {
-            id: playerId,
-            x: localPlayer.x,
-            y: localPlayer.y
-          };
-          socket.send(JSON.stringify(data));
-        }
-      }
+    // Función que se ejecuta al hacer clic en "Iniciar Juego"
+    function startGame() {
+      // Obtener los valores de los checkboxes
+      isRadioOperator = document.getElementById("radioOperator").checked;
+      isObserver = document.getElementById("observer").checked;
+      // Aquí podrías, por ejemplo, imprimir en consola o usar estos valores para definir la lógica de roles:
+      console.log("Operador de Radio:", isRadioOperator, "Observador:", isObserver);
+      
+      // Ocultar el menú
+      document.getElementById("menu").style.display = "none";
+      // Iniciar el juego
+      initGame();
     }
 
-    // Variable global para acceder a la escena desde el manejador de WebSocket
-    let gameScene;
+    // Función que inicializa el juego
+    function initGame() {
+      // Conexión al servidor WebSocket (asegúrate de tener un servidor que retransmita mensajes a todos)
+      const socket = new WebSocket("ws://localhost:8080/GameServer/game");
 
-    // Configuración de Phaser
-    const config = {
-      type: Phaser.AUTO,
-      width: 800,
-      height: 600,
-      physics: { default: 'arcade' },
-      scene: {
-        preload: function() { GameScene.prototype.preload.call(this); },
-        create: function() {
-          GameScene.prototype.create.call(this);
-          gameScene = this; // Guardamos la referencia a la escena
-        },
-        update: function() { GameScene.prototype.update.call(this); }
+      // Genera un ID único para este jugador
+      const playerId = Math.random().toString(36).substring(2, 9);
+
+      // Diccionario para almacenar los sprites de los jugadores (local y remotos)
+      let players = {};
+      let clouds = [];  // Array para almacenar las nubes
+
+      // Manejador de mensajes del WebSocket
+      socket.onmessage = function(event) {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.id) {
+            // Si el mensaje proviene de otro jugador...
+            if (data.id !== playerId) {
+              if (!players[data.id]) {
+                players[data.id] = gameScene.add.image(data.x, data.y, 'player')
+                  .setOrigin(0.5, 0.5)
+                  .setScale(0.1);
+              } else {
+                players[data.id].setPosition(data.x, data.y);
+                if (data.angle !== undefined) {
+                  players[data.id].setAngle(data.angle);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Error procesando el mensaje:", e);
+        }
+      };
+
+      // Definición de la escena de juego
+      class GameScene extends Phaser.Scene {
+        constructor() {
+          super('GameScene');
+        }
+
+        preload() {
+          // Cargar las imágenes necesarias (asegúrate de que las rutas sean correctas)
+          this.load.image('player', 'assets/player.png');
+          this.load.image('cloud', 'assets/cloud.png');
+        }
+
+        create() {
+            // Definir el tamaño del mundo
+            this.worldWidth = 8000;
+            this.worldHeight = 3000;
+
+            // Establecer los límites de la cámara principal
+            this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
+
+            // Cambiar el fondo a color celeste
+            this.cameras.main.setBackgroundColor(0x87CEEB);
+
+            // Crear grupos para las nubes
+            this.cloudGroupFar = this.add.group();  // Grupo para nubes lejanas (más lentas)
+            this.cloudGroupNear = this.add.group(); // Grupo para nubes cercanas (más rápidas)
+
+            // Generar 1000 nubes con efecto parallax
+            for (let i = 0; i < 1000; i++) {
+              let cloudX = Phaser.Math.Between(0, this.worldWidth);
+              let cloudY = Phaser.Math.Between(0, this.worldHeight);
+              let cloud = this.add.image(cloudX, cloudY, 'cloud').setScale(0.1);
+
+              // Asignar las nubes a diferentes grupos dependiendo de su "profundidad"
+              if (Math.random() > 0.5) {
+                this.cloudGroupFar.add(cloud);
+                cloud.setDepth(0); // Capa más lejana
+              } else {
+                this.cloudGroupNear.add(cloud);
+                cloud.setDepth(1); // Capa más cercana
+              }
+            }
+
+            // Posición inicial del jugador
+            this.playerPosition = { x: this.worldWidth / 2, y: this.worldHeight / 2 };
+
+            // Crear el sprite del jugador
+            players[playerId] = this.add.image(this.playerPosition.x, this.playerPosition.y, 'player')
+              .setOrigin(0.5, 0.5)
+              .setScale(0.1);
+
+            // La cámara principal sigue al jugador
+            this.cameras.main.startFollow(players[playerId]);
+
+            // Crear la cámara del minimapa
+            this.minimap = this.cameras.add(200, 10, 400, 100).setZoom(0.2).setName('mini');
+            this.minimap.setBackgroundColor(0x002244);
+            this.minimap.setBounds(0, 0, this.worldWidth, this.worldHeight);
+
+            // Desactivar el renderizado de las nubes en el minimapa
+            this.minimap.ignore(this.cloudGroupFar);
+            this.minimap.ignore(this.cloudGroupNear);
+
+            // Capturar las teclas de dirección
+            this.cursors = this.input.keyboard.createCursorKeys();
+            this.speed = 2;
+            this.lastAngle = 0;
+
+            // Ajuste en caso de cambio de tamaño de la ventana
+            window.addEventListener('resize', () => {
+              game.scale.resize(window.innerWidth, window.innerHeight);
+            });
+          }
+
+        update() {
+          let moved = false;
+          let angle = null;
+          let newVelocity = { x: 0, y: 0 };
+
+          // Comprobar las teclas para determinar la dirección y velocidad
+          if (this.cursors.left.isDown) {
+            newVelocity.x = -this.speed;
+            moved = true;
+            angle = 270;
+          }
+          if (this.cursors.right.isDown) {
+            newVelocity.x = this.speed;
+            moved = true;
+            angle = 90;
+          }
+          if (this.cursors.up.isDown) {
+            newVelocity.y = -this.speed;
+            moved = true;
+            angle = 0;
+          }
+          if (this.cursors.down.isDown) {
+            newVelocity.y = this.speed;
+            moved = true;
+            angle = 180;
+          }
+          // Manejo de diagonales
+          if (this.cursors.left.isDown && this.cursors.up.isDown) {
+            angle = 315;
+          } else if (this.cursors.right.isDown && this.cursors.up.isDown) {
+            angle = 45;
+          } else if (this.cursors.left.isDown && this.cursors.down.isDown) {
+            angle = 225;
+          } else if (this.cursors.right.isDown && this.cursors.down.isDown) {
+            angle = 135;
+          }
+
+          // Si se presionan teclas, actualizamos el último ángulo
+          if (moved) {
+            this.lastAngle = angle;
+          } else {
+            // Si no se presionan teclas, el jugador avanza continuamente en la dirección del último ángulo
+            let rad = Phaser.Math.DegToRad(this.lastAngle - 90); // Restamos 90° para que 0° sea "arriba"
+            newVelocity.x = Math.cos(rad) * this.speed;
+            newVelocity.y = Math.sin(rad) * this.speed;
+            angle = this.lastAngle;
+          }
+
+          // Actualizar la posición del jugador en el mundo
+          this.playerPosition.x += newVelocity.x;
+          this.playerPosition.y += newVelocity.y;
+          players[playerId].setPosition(this.playerPosition.x, this.playerPosition.y);
+          players[playerId].setAngle(angle);
+
+          // Enviar la posición y ángulo del jugador al servidor vía WebSocket
+          const data = {
+            id: playerId,
+            x: this.playerPosition.x,
+            y: this.playerPosition.y,
+            angle: angle
+          };
+          socket.send(JSON.stringify(data));
+
+          // Actualizar la cámara del minimapa para centrarla en el jugador.
+          // Con un zoom de 0.2 y un viewport de 400x100, el área visible es de 2000 x 500 píxeles.
+          this.minimap.scrollX = Phaser.Math.Clamp(this.playerPosition.x - 1000, 0, this.worldWidth - 2000);
+          this.minimap.scrollY = Phaser.Math.Clamp(this.playerPosition.y - 250, 0, this.worldHeight - 500);
+          
+       // Efecto parallax: mover las nubes de forma diferente según su grupo
+          this.cloudGroupFar.getChildren().forEach(cloud => {
+            cloud.x -= 0.1; // Movimiento lento para las nubes lejanas
+            if (cloud.x < 0) cloud.x = this.worldWidth; // Resetear al final del mapa
+          });
+
+          this.cloudGroupNear.getChildren().forEach(cloud => {
+            cloud.x -= 0.3; // Movimiento rápido para las nubes cercanas
+            if (cloud.x < 0) cloud.x = this.worldWidth; // Resetear al final del mapa
+          });
+          
+        }
       }
-    };
 
-    // Inicializar el juego
-    const game = new Phaser.Game(config);
+      const config = {
+        type: Phaser.AUTO,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        physics: { default: 'arcade' },
+        scene: {
+          preload: function() { GameScene.prototype.preload.call(this); },
+          create: function() {
+            GameScene.prototype.create.call(this);
+            gameScene = this; // Guardamos la referencia a la escena para el WebSocket
+          },
+          update: function() { GameScene.prototype.update.call(this); }
+        }
+      };
+
+      game = new Phaser.Game(config);
+    }
   </script>
 </body>
 </html>
